@@ -1,5 +1,8 @@
 const fs = require('fs').promises;
 const path = require('path');
+const minimist = require('minimist');
+const micromatch = require('micromatch');
+const ignore = require('ignore');
 
 // Define file types and their corresponding languages for syntax highlighting
 const FILE_TYPES = {
@@ -50,16 +53,49 @@ const TYPE_DEFINITION_FILES = new Set([
     'vite-env.d.ts'
 ]);
 
+// Load and parse .gitignore file
+async function loadGitignore(directory) {
+    try {
+        const gitignorePath = path.join(directory, '.gitignore');
+        const content = await fs.readFile(gitignorePath, 'utf8');
+        return ignore().add(content);
+    } catch (error) {
+        // If .gitignore doesn't exist, return an ignore instance with default patterns
+        return ignore().add([
+            'node_modules',
+            'dist',
+            'build',
+            '.git',
+            'out',
+            'coverage',
+            '*.log'
+        ].join('\n'));
+    }
+}
+
 async function main() {
     try {
         // Get command line arguments
-        const args = process.argv.slice(2);
-        const excludeStyles = args.includes('--no-styles');
-        const excludeTypes = args.includes('--no-types');
+        const argv = minimist(process.argv.slice(2), {
+            string: ['exclude'],
+            boolean: ['no-styles', 'no-types', 'include-ignored'],
+            alias: {
+                e: 'exclude',
+                i: 'include-ignored'
+            }
+        });
+        
+        const excludeStyles = argv['no-styles'];
+        const excludeTypes = argv['no-types'];
+        const includeIgnored = argv['include-ignored'];
+        const excludePatterns = argv.exclude ? argv.exclude.split(',') : [];
         
         // Get the current directory
         const currentDirectory = process.cwd();
         const currentDirectoryName = path.basename(currentDirectory);
+
+        // Load .gitignore patterns
+        const ig = await loadGitignore(currentDirectory);
 
         // Create the 'src' directory path
         const srcDirectory = path.join(currentDirectory, 'src');
@@ -79,7 +115,7 @@ async function main() {
         const markdownContent = [];
 
         // Get all files
-        const files = await getAllFiles(currentDirectory, Object.keys(FILE_TYPES));
+        const files = await getAllFiles(currentDirectory, Object.keys(FILE_TYPES), excludePatterns, ig, includeIgnored);
         
         // Sort files by extension and then by path for better organization
         files.sort((a, b) => {
@@ -179,6 +215,10 @@ async function main() {
         console.log(`Custom instructions have been created at ${customInstructionsPath}`);
         console.log(`Styles ${excludeStyles ? 'excluded' : 'included'} in the output`);
         console.log(`Type definitions ${excludeTypes ? 'excluded' : 'included'} in the output`);
+        console.log(`.gitignore patterns ${includeIgnored ? 'ignored' : 'respected'}`);
+        if (excludePatterns.length > 0) {
+            console.log(`Additional excluded patterns: ${excludePatterns.join(', ')}`);
+        }
         console.log('\nFile statistics:');
         Object.entries(fileStats)
             .sort((a, b) => b[1] - a[1])
@@ -192,7 +232,38 @@ async function main() {
     }
 }
 
-// Helper function to remove styles from framework files
+async function getAllFiles(directory, extensions, excludePatterns, ig, includeIgnored) {
+    const files = [];
+    
+    async function traverse(dir) {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            const relativePath = path.relative(directory, fullPath);
+            
+            // Skip files based on .gitignore unless includeIgnored is true
+            if (!includeIgnored && ig.ignores(relativePath)) {
+                continue;
+            }
+            
+            // Check if the path matches any exclude patterns
+            if (excludePatterns.length > 0 && micromatch.isMatch(relativePath, excludePatterns)) {
+                continue;
+            }
+            
+            if (entry.isDirectory()) {
+                await traverse(fullPath);
+            } else if (entry.isFile() && extensions.includes(path.extname(fullPath))) {
+                files.push(fullPath);
+            }
+        }
+    }
+    
+    await traverse(directory);
+    return files;
+}
+
 async function removeStyles(content, extension) {
     switch (extension) {
         case '.vue':
@@ -206,7 +277,6 @@ async function removeStyles(content, extension) {
     }
 }
 
-// Helper function to remove type definitions from TypeScript files
 async function removeTypeDefinitions(content) {
     // Remove interface definitions
     content = content.replace(/^interface\s+\w+\s*{[^}]*}/gm, '');
@@ -232,31 +302,6 @@ async function removeTypeDefinitions(content) {
     return content;
 }
 
-// Helper function to recursively get all files with specific extensions
-async function getAllFiles(directory, extensions) {
-    const files = [];
-    
-    async function traverse(dir) {
-        const entries = await fs.readdir(dir, { withFileTypes: true });
-        
-        for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            
-            if (entry.isDirectory()) {
-                // Skip node_modules and common build directories
-                if (['node_modules', 'dist', 'build', '.git', 'out'].includes(entry.name)) continue;
-                await traverse(fullPath);
-            } else if (entry.isFile() && extensions.includes(path.extname(fullPath))) {
-                files.push(fullPath);
-            }
-        }
-    }
-    
-    await traverse(directory);
-    return files;
-}
-
-// Helper function to get project synopsis from README.md
 async function getProjectSynopsis(currentDirectory, currentDirectoryName) {
     try {
         const readmePath = path.join(currentDirectory, 'README.md');

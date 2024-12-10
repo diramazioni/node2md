@@ -1,12 +1,16 @@
 {
-  "name": "codebase-to-md",
+  "name": "node-to-md",
   "version": "1.0.0",
-  "description": "Convert project codebase to markdown for AI analysis",
+  "description": "Convert Node.js/TypeScript project codebase to markdown for AI analysis",
   "main": "index.js",
   "bin": {
     "node-to-md": "./cli.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "minimist": "^1.2.8",
+    "micromatch": "^4.0.5",
+    "ignore": "^5.3.0"
+  },
   "keywords": [
     "markdown",
     "documentation",
@@ -15,7 +19,8 @@
     "javascript",
     "svelte",
     "vue",
-    "astro"
+    "astro",
+    "node"
   ],
   "author": "Your Name",
   "license": "MIT",
