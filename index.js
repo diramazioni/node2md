@@ -1,10 +1,49 @@
 const fs = require('fs').promises;
 const path = require('path');
 
+// Define file types and their corresponding languages for syntax highlighting
+const FILE_TYPES = {
+    // TypeScript
+    '.ts': 'typescript',
+    '.tsx': 'typescript',
+    '.mts': 'typescript',
+    '.cts': 'typescript',
+    
+    // JavaScript
+    '.js': 'javascript',
+    '.jsx': 'javascript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
+    
+    // Framework-specific
+    '.svelte': 'svelte',
+    '.vue': 'vue',
+    '.astro': 'astro',
+    
+    // Solid
+    '.jsx': 'javascript',
+    '.tsx': 'typescript',
+    
+    // Style files
+    '.css': 'css',
+    '.scss': 'scss',
+    '.sass': 'sass',
+    '.less': 'less',
+    '.styl': 'stylus',
+    
+    // Config files
+    '.postcss': 'css',
+    '.styled': 'javascript'
+};
+
+// Style-related file extensions
+const STYLE_EXTENSIONS = new Set(['.css', '.scss', '.sass', '.less', '.styl', '.postcss']);
+
 async function main() {
     try {
         // Get command line arguments
         const args = process.argv.slice(2);
+        const excludeStyles = args.includes('--no-styles');
         
         // Get the current directory
         const currentDirectory = process.cwd();
@@ -27,42 +66,43 @@ async function main() {
         // Initialize content array to store all file contents
         const markdownContent = [];
 
-        // Function to process files of specific extensions
-        async function processFiles(extensions) {
-            for (const ext of extensions) {
-                const files = await getAllFiles(currentDirectory, ext);
-                
-                for (const file of files) {
-                    const fileContent = await fs.readFile(file, 'utf8');
-                    const relativePath = path.relative(currentDirectory, file);
-                    
-                    // Determine the language for syntax highlighting
-                    let language;
-                    switch (path.extname(file)) {
-                        case '.ts':
-                            language = 'typescript';
-                            break;
-                        case '.js':
-                            language = 'javascript';
-                            break;
-                        case '.svelte':
-                            language = 'svelte';
-                            break;
-                        default:
-                            language = 'plaintext';
-                    }
-
-                    // Add file content to markdown
-                    markdownContent.push(`# ${relativePath}\n`);
-                    markdownContent.push(`\`\`\`${language}`);
-                    markdownContent.push(fileContent);
-                    markdownContent.push('```\n');
-                }
+        // Get all files
+        const files = await getAllFiles(currentDirectory, Object.keys(FILE_TYPES));
+        
+        // Sort files by extension and then by path for better organization
+        files.sort((a, b) => {
+            const extA = path.extname(a);
+            const extB = path.extname(b);
+            if (extA === extB) {
+                return a.localeCompare(b);
             }
-        }
+            return extA.localeCompare(extB);
+        });
 
-        // Process all relevant file types
-        await processFiles(['.ts', '.js', '.svelte']);
+        // Process each file
+        for (const file of files) {
+            const extension = path.extname(file);
+            
+            // Skip style files if --no-styles flag is present
+            if (excludeStyles && STYLE_EXTENSIONS.has(extension)) {
+                continue;
+            }
+
+            let fileContent = await fs.readFile(file, 'utf8');
+            const relativePath = path.relative(currentDirectory, file);
+            const language = FILE_TYPES[extension] || 'plaintext';
+
+            // Process framework-specific files to remove styles if --no-styles flag is present
+            if (excludeStyles) {
+                fileContent = await removeStyles(fileContent, extension);
+            }
+
+            // Add file content to markdown with a header showing the file type
+            markdownContent.push(`# ${relativePath} (${language})\n`);
+            markdownContent.push(`\`\`\`${language}`);
+            markdownContent.push(fileContent);
+            markdownContent.push('```\n');
+        }
 
         // Write the markdown file
         await fs.writeFile(markdownFilePath, markdownContent.join('\n'));
@@ -71,18 +111,39 @@ async function main() {
         const customInstructionsPath = path.join(srcDirectory, 'custom_instructions.txt');
         const synopsis = await getProjectSynopsis(currentDirectory, currentDirectoryName);
         
+        const frameworks = [
+            'TypeScript', 'JavaScript', 'React', 'Vue', 
+            'Svelte', 'Solid', 'Astro'
+        ].join('/');
+
         const customInstructions = [
             synopsis || `[Please provide a synopsis of the ${currentDirectoryName} project.]`,
             '',
-            `Please act as an expert TypeScript/JavaScript/Svelte developer and software engineer. The attached ${markdownFileName} file contains the complete and up-to-date codebase for our application. Your task is to thoroughly analyze the codebase, understand its programming flow and logic, and provide detailed insights, suggestions, and solutions to enhance the application's performance, efficiency, readability, and maintainability.`,
+            `Please act as an expert ${frameworks} developer and software engineer. The attached ${markdownFileName} file contains the complete and up-to-date codebase for our application${excludeStyles ? ' (excluding styles)' : ''}. Your task is to thoroughly analyze the codebase, understand its programming flow and logic, and provide detailed insights, suggestions, and solutions to enhance the application's performance, efficiency, readability, and maintainability.`,
             '',
             'We highly value responses that demonstrate a deep understanding of the code. Please ensure your recommendations are thoughtful, well-analyzed, and contribute positively to the project\'s success. Your expertise is crucial in helping us improve and upgrade our application.'
         ].join('\n');
 
         await fs.writeFile(customInstructionsPath, customInstructions);
 
+        // Print summary statistics
+        const fileStats = files.reduce((acc, file) => {
+            const ext = path.extname(file);
+            if (!excludeStyles || !STYLE_EXTENSIONS.has(ext)) {
+                acc[ext] = (acc[ext] || 0) + 1;
+            }
+            return acc;
+        }, {});
+
         console.log(`All files have been compiled into ${markdownFilePath}`);
         console.log(`Custom instructions have been created at ${customInstructionsPath}`);
+        console.log(`Styles ${excludeStyles ? 'excluded' : 'included'} in the output`);
+        console.log('\nFile statistics:');
+        Object.entries(fileStats)
+            .sort((a, b) => b[1] - a[1])
+            .forEach(([ext, count]) => {
+                console.log(`${ext}: ${count} files`);
+            });
 
     } catch (error) {
         console.error('An error occurred:', error);
@@ -90,8 +151,28 @@ async function main() {
     }
 }
 
-// Helper function to recursively get all files with specific extension
-async function getAllFiles(directory, extension) {
+// Helper function to remove styles from framework files
+async function removeStyles(content, extension) {
+    switch (extension) {
+        case '.vue':
+            // Remove <style> blocks from Vue files
+            return content.replace(/<style(\s[^>]*)?>[^]*?<\/style>/gi, '');
+            
+        case '.svelte':
+            // Remove <style> blocks from Svelte files
+            return content.replace(/<style(\s[^>]*)?>[^]*?<\/style>/gi, '');
+            
+        case '.astro':
+            // Remove <style> blocks from Astro files
+            return content.replace(/<style(\s[^>]*)?>[^]*?<\/style>/gi, '');
+            
+        default:
+            return content;
+    }
+}
+
+// Helper function to recursively get all files with specific extensions
+async function getAllFiles(directory, extensions) {
     const files = [];
     
     async function traverse(dir) {
@@ -101,10 +182,10 @@ async function getAllFiles(directory, extension) {
             const fullPath = path.join(dir, entry.name);
             
             if (entry.isDirectory()) {
-                // Skip node_modules directory
-                if (entry.name === 'node_modules') continue;
+                // Skip node_modules and common build directories
+                if (['node_modules', 'dist', 'build', '.git', 'out'].includes(entry.name)) continue;
                 await traverse(fullPath);
-            } else if (entry.isFile() && path.extname(fullPath) === extension) {
+            } else if (entry.isFile() && extensions.includes(path.extname(fullPath))) {
                 files.push(fullPath);
             }
         }
