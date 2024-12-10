@@ -8,6 +8,7 @@ const FILE_TYPES = {
     '.tsx': 'typescript',
     '.mts': 'typescript',
     '.cts': 'typescript',
+    '.d.ts': 'typescript',
     
     // JavaScript
     '.js': 'javascript',
@@ -39,11 +40,22 @@ const FILE_TYPES = {
 // Style-related file extensions
 const STYLE_EXTENSIONS = new Set(['.css', '.scss', '.sass', '.less', '.styl', '.postcss']);
 
+// Common type definition files
+const TYPE_DEFINITION_FILES = new Set([
+    'app.d.ts',
+    'global.d.ts',
+    'types.d.ts',
+    'index.d.ts',
+    'environment.d.ts',
+    'vite-env.d.ts'
+]);
+
 async function main() {
     try {
         // Get command line arguments
         const args = process.argv.slice(2);
         const excludeStyles = args.includes('--no-styles');
+        const excludeTypes = args.includes('--no-types');
         
         // Get the current directory
         const currentDirectory = process.cwd();
@@ -82,9 +94,19 @@ async function main() {
         // Process each file
         for (const file of files) {
             const extension = path.extname(file);
+            const basename = path.basename(file);
             
             // Skip style files if --no-styles flag is present
             if (excludeStyles && STYLE_EXTENSIONS.has(extension)) {
+                continue;
+            }
+
+            // Skip type definition files if --no-types flag is present
+            if (excludeTypes && (
+                extension === '.d.ts' || 
+                TYPE_DEFINITION_FILES.has(basename) ||
+                basename.endsWith('.d.ts')
+            )) {
                 continue;
             }
 
@@ -92,9 +114,18 @@ async function main() {
             const relativePath = path.relative(currentDirectory, file);
             const language = FILE_TYPES[extension] || 'plaintext';
 
-            // Process framework-specific files to remove styles if --no-styles flag is present
+            // Process content based on flags
             if (excludeStyles) {
                 fileContent = await removeStyles(fileContent, extension);
+            }
+            
+            if (excludeTypes && (extension === '.ts' || extension === '.tsx')) {
+                fileContent = await removeTypeDefinitions(fileContent);
+            }
+
+            // Skip empty files after processing
+            if (!fileContent.trim()) {
+                continue;
             }
 
             // Add file content to markdown with a header showing the file type
@@ -116,10 +147,15 @@ async function main() {
             'Svelte', 'Solid', 'Astro'
         ].join('/');
 
+        const exclusions = [];
+        if (excludeStyles) exclusions.push('styles');
+        if (excludeTypes) exclusions.push('type definitions');
+        const exclusionText = exclusions.length ? ` (excluding ${exclusions.join(' and ')})` : '';
+
         const customInstructions = [
             synopsis || `[Please provide a synopsis of the ${currentDirectoryName} project.]`,
             '',
-            `Please act as an expert ${frameworks} developer and software engineer. The attached ${markdownFileName} file contains the complete and up-to-date codebase for our application${excludeStyles ? ' (excluding styles)' : ''}. Your task is to thoroughly analyze the codebase, understand its programming flow and logic, and provide detailed insights, suggestions, and solutions to enhance the application's performance, efficiency, readability, and maintainability.`,
+            `Please act as an expert ${frameworks} developer and software engineer. The attached ${markdownFileName} file contains the complete and up-to-date codebase for our application${exclusionText}. Your task is to thoroughly analyze the codebase, understand its programming flow and logic, and provide detailed insights, suggestions, and solutions to enhance the application's performance, efficiency, readability, and maintainability.`,
             '',
             'We highly value responses that demonstrate a deep understanding of the code. Please ensure your recommendations are thoughtful, well-analyzed, and contribute positively to the project\'s success. Your expertise is crucial in helping us improve and upgrade our application.'
         ].join('\n');
@@ -129,7 +165,11 @@ async function main() {
         // Print summary statistics
         const fileStats = files.reduce((acc, file) => {
             const ext = path.extname(file);
-            if (!excludeStyles || !STYLE_EXTENSIONS.has(ext)) {
+            const basename = path.basename(file);
+            if (
+                (!excludeStyles || !STYLE_EXTENSIONS.has(ext)) &&
+                (!excludeTypes || !(ext === '.d.ts' || TYPE_DEFINITION_FILES.has(basename) || basename.endsWith('.d.ts')))
+            ) {
                 acc[ext] = (acc[ext] || 0) + 1;
             }
             return acc;
@@ -138,6 +178,7 @@ async function main() {
         console.log(`All files have been compiled into ${markdownFilePath}`);
         console.log(`Custom instructions have been created at ${customInstructionsPath}`);
         console.log(`Styles ${excludeStyles ? 'excluded' : 'included'} in the output`);
+        console.log(`Type definitions ${excludeTypes ? 'excluded' : 'included'} in the output`);
         console.log('\nFile statistics:');
         Object.entries(fileStats)
             .sort((a, b) => b[1] - a[1])
@@ -155,20 +196,40 @@ async function main() {
 async function removeStyles(content, extension) {
     switch (extension) {
         case '.vue':
-            // Remove <style> blocks from Vue files
-            return content.replace(/<style(\s[^>]*)?>[^]*?<\/style>/gi, '');
-            
         case '.svelte':
-            // Remove <style> blocks from Svelte files
-            return content.replace(/<style(\s[^>]*)?>[^]*?<\/style>/gi, '');
-            
         case '.astro':
-            // Remove <style> blocks from Astro files
+            // Remove <style> blocks from component files
             return content.replace(/<style(\s[^>]*)?>[^]*?<\/style>/gi, '');
             
         default:
             return content;
     }
+}
+
+// Helper function to remove type definitions from TypeScript files
+async function removeTypeDefinitions(content) {
+    // Remove interface definitions
+    content = content.replace(/^interface\s+\w+\s*{[^}]*}/gm, '');
+    
+    // Remove type aliases
+    content = content.replace(/^type\s+\w+\s*=\s*[^;]+;/gm, '');
+    
+    // Remove standalone type declarations
+    content = content.replace(/^declare\s+[^;]+;/gm, '');
+    
+    // Remove enum definitions
+    content = content.replace(/^enum\s+\w+\s*{[^}]*}/gm, '');
+    
+    // Remove namespace declarations
+    content = content.replace(/^namespace\s+\w+\s*{[^}]*}/gm, '');
+    
+    // Remove type annotations from variables and parameters
+    content = content.replace(/:\s*([^=,\n\r{}]+)(?=[,)\n\r{])/g, '');
+    
+    // Clean up multiple empty lines
+    content = content.replace(/\n\s*\n\s*\n/g, '\n\n');
+    
+    return content;
 }
 
 // Helper function to recursively get all files with specific extensions
